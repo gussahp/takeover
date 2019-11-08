@@ -123,26 +123,30 @@ class sources_db():
 
     def find_item(self, item_name):
         db_entry = None
+        error_found = False
         if self.load():
             # try to find exact name
             db_entry = self._db_dict.get(item_name)
             if db_entry is None:
                 #try to find with partial name
                 #create a list of tuples with (sort_name, original_name) eg: [('20191030050124_runtime', 'runtime'),]
-                names = [(i.split('_')[1], i) for i in self._db_dict.keys()]
+                names = [(i.split('_', maxsplit = 1)[1], i) for i in self._db_dict.keys()]
                 for i in names:
                     if i[0] == item_name:
                         if db_entry is not None:
                             logging.error('yuuuups, item name {} found more than once. dont kow what to do...'.format(item_name))
+                            error_found = True
                             break
                         else:
                             db_entry = self._db_dict[i[1]]
-        if db_entry is None:
+        if error_found:
+            item = None
+        elif db_entry is None:
             logging.error('iten name {} not found. may be try something else?'.format(item_name))
-            db_item = None
+            item = None
         else:
-            db_item(db_entry, self._db_folder_path)
-        return db_item
+            item = db_item(db_entry, self._db_folder_path)
+        return item
 
 
     def all_items(self):
@@ -151,7 +155,7 @@ class sources_db():
                 yield db_item(v, self._db_folder_path)
 
 
-    def remove_item(self, iten_name, dryrun):
+    def remove_item(self, item_name, dryrun):
         '''remove 'item_name' from the database (storage and json file). 
         'item_name' is a string representing an element in the database'''
         removed_ok = True
@@ -301,10 +305,10 @@ class db_item():
         return root_path
 
 
-    def copy_to(self, dset, dryrun):
-        # TODO remember to ignore symlinks
-        logging.debug('db_item.copy() is not implemented yet')
-        return False
+    #def copy_to(self, dset, dryrun):
+    #    # TODO remember to ignore symlinks
+    #    logging.debug('db_item.copy() is not implemented yet')
+    #    return False
 
 
     def _copy_files(self, src_dest_pairs, dryrun):
@@ -350,10 +354,10 @@ class db_item():
         return self._copy_files(files_list, dryrun)
                 
 
-    def copy_tree_to(self, dryrun):
-        # TODO remember to ignore symlinks
-        logging.debug('db_item.copy() is not implemented yet')
-        return False
+    #def copy_tree_to(self, dryrun):
+    #    # TODO remember to ignore symlinks
+    #    logging.debug('db_item.copy() is not implemented yet')
+    #    return False
 
 
     def delete_created_links(self, dryrun):
@@ -427,9 +431,36 @@ class db_item():
         return item_removed
 
     
-    def copy_to_original_location(self):
-        #TODO implement
-        pass
+    def copy_to_original_location(self, db_path_alias = None, force = None, dryrun = None):
+        original_location = pathlib.Path(self.get_original_location())
+        db_item_path = pathlib.Path(self.get_db_path_alias())
+        files_list = list()
+        if original_location.is_dir():
+            for root, dirs, files in os.walk(db_item_path):
+                filtered_files = files
+                #take only file matching the suffixs
+                if self._suffixes and len(self._suffixes) > 0:
+                    filtered_files = [f for f in files if os_case(pathlib.Path(f).suffix) in self._suffixes]
+                for f in filtered_files:
+                    src = pathlib.Path(root) / f
+                    if not src.is_symlink():
+                        relative_path = src.relative_to(db_item_path)
+                        dest = original_location / relative_path
+                        if dest.exists():
+                            if force:
+                                dest.unlink()
+                                files_list.append((src, dest.parent))
+                            else:
+                                logging.info('file {} already exist in destination. it will not be retored. use --force to replace the existing file'.format(dest))
+                        else:
+                            files_list.append((src, dest))
+        else:
+            if len(db_item_path.iterdir()) > 1:
+                logging.error('weird shit. item {} took over one file but there are more in database'.format(str(db_item_path)))
+            else:
+                db_item_file = db_item_path.iterdir()[0] #assuming only one file in the directory
+                files_list.append((db_item_file, original_location))
+        return self._copy_files(files_list, dryrun)
 
 
     def create_all_links(self, db_path_alias = None, force = False, dryrun = False):
@@ -465,13 +496,13 @@ class db_item():
         db_file = pathlib.Path(db_file_location)
         # check if file exists with the same name as the required link
         if symlink_file.exists() or symlink_file.is_symlink():
-            if db_file.is_dir():
-                logging.error('link creation from {} to {} failed. both must not be directories'.format(dest, source))
+            if symlink_file.is_dir():
+                logging.error('link creation from {} to {} failed. both must not be directories'.format(db_file, symlink_file))
                 ready_to_link = False
             elif symlink_file.is_file():
                 # remove the existing file if requested
                 if not force:
-                    logging.error('link creation in {} failed, a file with the same name already exist. use "force" to remove the existing file'.format(dest))
+                    logging.error('link creation in {} failed, a file with the same name already exist. use "force" to remove the existing file'.format(symlink_file))
                     ready_to_link = False
                 else:
                     symlink_file.unlink()
@@ -513,14 +544,13 @@ def restore_source(args):
         if db_item:
             db_item.copy_to_original_location(None, args.force, args.dryrun)        
             if args.remove:
-                if db_item.delete_from_storage(args.name, args.dryrun):
-                    db.remove_item(args.name, args.dryrun)
+                db.remove_item(args.name, args.dryrun)
     else:
-        for i in db.all_items():
+        # using list instead of iterator because removing items from the directory changes the list during iteration
+        for i in list(db.all_items()): 
             i.copy_to_original_location(None, args.force, args.dryrun)
             if args.remove:
-                if i.delete_from_storage(args.name, args.dryrun):
-                    db.remove_item(i.get_id(), args.dryrun)
+                db.remove_item(i.get_id(), args.dryrun)
 
 
 def init(args):
@@ -531,14 +561,14 @@ def init(args):
 def set_links(args):
     db = sources_db()
     if args.name is not None:
-        db_item = db.find_item(args.name)
-        if db_item:
+        item = db.find_item(args.name)
+        if item:
             # link from required dest to local storage
-            db_item.create_all_links(None, args.force, args.dryrun)        
+            item.create_all_links(None, args.force, args.dryrun)        
             
     else:
-        for i in db.all_items():
-            db_item.create_all_links(None, args.force, args.dryrun)
+        for item in db.all_items():
+            item.create_all_links(None, args.force, args.dryrun)
 
 
 def remove_source(args):
@@ -546,7 +576,7 @@ def remove_source(args):
     if args.name is not None:
         db_item = db.find_item(args.name)
         if db_item:
-            if db_item.delete_from_storage(args.name, args.dryrun):
+            if db_item.delete_from_storage(args.dryrun):
                 db.remove_item(args.name, args.dryrun)
 
 
@@ -563,6 +593,11 @@ def list_sources(args):
             print(name + ' '*(cellsize - len(name)+2) + id)
         else:
             print(i.get_id().split('_')[1])
+
+
+def update(args):
+    #TODO:
+    logging.critical('Not implement yet')
 
 
 def init(args):
@@ -595,6 +630,7 @@ def handle_args():
     parser_set_links = subparsers.add_parser('set_links', description = 'Set links for the managed sources')
     parser_set_links.add_argument('-n', '--name', default = None, help = 'Name of database source to use (see "list" command). If not set, all sources will be used')
     parser_set_links.add_argument('-t', '--target', default = None, help = 'Path for the link to point to. If not set, the default path will be used')
+    #TODO: parser_set_links.add_argument('-l', '--link-path', default = None, help = 'Base path for where to put the links. If not set, the default (original path) path will be used')
     parser_set_links.add_argument('-d', '--dryrun', action = 'store_true', default = False, help = 'Actions will only be printed out. There will be no effect on the file system')
     parser_set_links.add_argument('-f', '--force', action = 'store_true', default = False, help = 'New links will remove existing file or links')
     parser_set_links.set_defaults(func = set_links)
@@ -612,6 +648,13 @@ def handle_args():
     parser_remove.add_argument('-n', '--name', required = True, default = None, help = 'Name of source to use (see "list" command).')
     parser_remove.add_argument('-d', '--dryrun', action = 'store_true', default = False, help = 'Actions will only be printed out. There will be no effect on the file system')
     parser_remove.set_defaults(func = remove_source)
+
+    # create the parser for the "update" command - update database entry with newly created files
+    parser_update = subparsers.add_parser('update', description = 'update database items')
+    parser_update.add_argument('-n', '--name', required = True, default = None, help = 'Name of source to use (see "list" command).')
+    parser_update.add_argument('-e', '--extensions', nargs = '+', default = None, help = 'A list of file extensions to to consider when updating. If not set all files are considered eg: -t xml ini')
+    parser_update.add_argument('-d', '--dryrun', action = 'store_true', default = False, help = 'Actions will only be printed out. There will be no effect on the file system')
+    parser_update.set_defaults(func = update)
 
     # create the parser for the "list" command
     parser_list = subparsers.add_parser('list', description = 'List the managed files and folders')
