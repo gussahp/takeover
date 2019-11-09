@@ -63,25 +63,6 @@ class Test_take_over(BaseTestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        '''
-        def setUp(self):
-        temp_cwd = self.cwd / '..'
-        if temp_cwd.exists():
-            os.chdir(temp_cwd)
-            shutil.rmtree(self.cwd, ignore_errors = True)
-
-        setattr(self.takeover_args, 'path', str(self.files_dir))
-        setattr(self.takeover_args, 'target', None)
-        setattr(self.takeover_args, 'extensions', None)
-        setattr(self.takeover_args, 'dryrun', False)
-
-        self.db_dir.mkdir(parents = True, exist_ok = True)
-        self.files_dir.mkdir(parents = True, exist_ok = True)
-        for i in range(self.FILES_NUM):
-            file = self.files_dir / 'file_{}.txt'.format(i)
-            file.touch()
-        os.chdir(self.db_dir)
-        '''
 
     def get_single_item_db_path(self):
         '''return the path of the item in the database. Only single item is assumed to be in the database'''
@@ -516,7 +497,7 @@ class Test_remove_source(BaseTestCase):
             for file in files:
                 f = pathlib.Path(root) / file
                 self.assertTrue(f.is_symlink())
-
+        
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.CRITICAL)
