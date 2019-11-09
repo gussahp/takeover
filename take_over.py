@@ -163,23 +163,16 @@ class sources_db():
             db_item = self.find_item(item_name)
             if db_item:
                 # remove the files
-                item_folder = db_item.get_db_path()
-                if dryrun:
-                    logging.info('item folder  {} removed from database'.format(item_folder))
-                else:
-                    try:
-                        shutil.rmtree(item_folder)
-                    except:
-                        logging.error('couldnt remove {}'.format(item_folder))
-                        removed_ok = False
-                # remove from json
-                if removed_ok:
+                if db_item.delete_from_storage(dryrun):
+                    # remove from json
                     id = db_item.get_id()
                     if dryrun:
-                        logging.info('item {} removed from json database'.format(id))
+                        logging.info('dryrun - item {} removed from json database'.format(id))
                     else:
                         self._db_dict.pop(id)
                         removed_ok = self.save()
+                else:
+                    removed_ok = False
         return removed_ok
 
 
@@ -228,7 +221,7 @@ class sources_db():
             if not dryrun:
                 storage_dir.mkdir()
             else:
-                logging.info('dry run - creating folder {} in database'.format(id))
+                logging.info('dryrun - creating folder {} in database'.format(id))
 
             # copy filtered files to local storage
             new_entry = {
@@ -251,7 +244,7 @@ class sources_db():
             else:
                 # register in db dict
                 if dryrun:
-                    logging.info('dry run - adding new entry {} to database'.format(name))
+                    logging.info('dryrun - adding new entry {} to database'.format(name))
                     added_ok = True
                 else:
                     self._db_dict[new_entry['database id']] = new_entry
@@ -319,8 +312,8 @@ class db_item():
             dest = pathlib.Path(p[1])
             if dryrun:
                 if not dest.exists():
-                    logging.info('creating missing directory {}'.format(dest))
-                logging.info('copying file {} to {}'.format(src, dest))
+                    logging.info('dryrun - creating missing directory {}'.format(dest))
+                logging.info('dryrun - copying file {} to {}'.format(src, dest))
             else:
                 #create folder
                 try:
@@ -363,28 +356,50 @@ class db_item():
     def delete_created_links(self, dryrun):
         '''remove links pointing to the database item's'''
         item_removed = True
-        symlink_base_path = pathlib.Path(self.get_db_path())
+        symlink_base_path = pathlib.Path(self.get_symlink_file_location())
         db_path_base = pathlib.Path(self.get_db_path_alias())
         if self.is_file():
             dest_file = symlink_base_path
             self._delete_symlink(dest_file, dryrun)
         else:
-            for root, dirs, files in os.walk(db_path_base):
-                for f in files:
-                    db_file = pathlib.Path(root) / f
-                    relative_dest = db_file.relative_to(db_path_base)
-                    dest_file = symlink_base_path / relative_dest
-                    if dest_file.is_symlink(): 
-                        if not self._delete_symlink(dest_file, dryrun): 
-                            item_removed = False
+            if db_path_base.exists():
+                for root, dirs, files in os.walk(db_path_base):
+                    for f in files:
+                        db_file = pathlib.Path(root) / f
+                        relative_dest = db_file.relative_to(db_path_base)
+                        dest_file = symlink_base_path / relative_dest
+                        if dest_file.is_symlink(): 
+                            if not self._delete_symlink(dest_file, dryrun): 
+                                item_removed = False
+            else:
+                logging.error('trytin to delete links to database item {}, but the item does not exist'.format(db_path_base))
         return item_removed
+
+
+    def _delete_symlink(self, link, dryrun):
+        ''' try to delete the symlink given in"link" '''
+        delete_ok = True
+        if dryrun:
+            logging.info('dryrun - removing the link {}'.format(link))
+        else:
+            lnk = pathlib.Path(link)
+            if lnk.is_symlink():
+                try:
+                    lnk.unlink()
+                except:
+                    logging.error('could not remove the link {}. May be it is use'. foramt(link))
+                    delete_ok = False
+            else:
+                logging.error('requested link delete, but {} is not a symlink'.format(link))
+                delete_ok = False
+        return delete_ok
 
 
     def delete_from_storage(self, dryrun):
         '''remove the database item's files'''
         folder_removed = True
         if dryrun:
-            logging.info('removing item directory {} and all of its content'.format(self.get_db_path()))
+            logging.info('dryrun - removing item directory {} and all of its content from the databse'.format(self.get_db_path()))
         else:
             try:
                 shutil.rmtree(self.get_db_path())
@@ -399,7 +414,7 @@ class db_item():
         link_removed = True
         if dest_file.exists() and not dest_file.is_dir():
             if dryrun:
-                logging.info('dry run - removing file {}'.format(dest_file))
+                logging.info('dryrun - removing file {}'.format(dest_file))
             else:
                 try:
                     # only remove symlink
@@ -509,8 +524,8 @@ class db_item():
         if ready_to_link:
             if dryrun:
                 if not symlink_file.parent.exists(): 
-                    logging.info('dry run - creating missing directories tree: {}'.format(symlink_file.parent))
-                logging.info('dry run - creating a link in {} pointinh to {}'.format(symlink_file, db_file))
+                    logging.info('dryrun - creating missing directories tree: {}'.format(symlink_file.parent))
+                logging.info('dryrun - creating a link in {} pointinh to {}'.format(symlink_file, db_file))
             else:
                 #create directories tree if needed
                 if not symlink_file.parent.exists(): 
@@ -576,8 +591,8 @@ def remove_source(args):
     if args.name is not None:
         db_item = db.find_item(args.name)
         if db_item:
-            if db_item.delete_from_storage(args.dryrun):
-                db.remove_item(args.name, args.dryrun)
+            db_item.delete_created_links(args.dryrun)
+            db.remove_item(args.name, args.dryrun)
 
 
 def list_sources(args):

@@ -4,6 +4,7 @@ import pathlib
 import shutil
 import json
 import platform
+import logging
 import take_over
 
 
@@ -11,7 +12,7 @@ class Cargs():
     pass
 
 
-class Test_take_over(unittest.TestCase):
+class BaseTestCase(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cwd = os.getcwd()
@@ -19,7 +20,16 @@ class Test_take_over(unittest.TestCase):
         self.db_dir = self.cwd / 'db'
         self.files_dir = self.cwd / 'files'
         self.args = Cargs()
+        self.takeover_args = Cargs()
+        self.setup_created_files =list()
         self.FILES_NUM = 5
+        self.DIRS_NUM = 7
+        self.db_file_name = 'takeover_db.json'
+
+
+    def tearDown(self):
+        os.chdir(self.cwd / '..')
+        shutil.rmtree(self.cwd, ignore_errors = True)
 
 
     def setUp(self):
@@ -28,10 +38,42 @@ class Test_take_over(unittest.TestCase):
             os.chdir(temp_cwd)
             shutil.rmtree(self.cwd, ignore_errors = True)
 
-        setattr(self.args, 'path', str(self.files_dir))
-        setattr(self.args, 'target', None)
-        setattr(self.args, 'extensions', None)
-        setattr(self.args, 'dryrun', False)
+        setattr(self.takeover_args, 'path', str(self.files_dir))
+        setattr(self.takeover_args, 'target', None)
+        setattr(self.takeover_args, 'extensions', None)
+        setattr(self.takeover_args, 'dryrun', False)
+
+        self.db_dir.mkdir(parents = True, exist_ok = True)
+        self.files_dir.mkdir(parents = True, exist_ok = True)
+        for i in range(self.FILES_NUM):
+            file = self.files_dir / 'file_{}.txt'.format(i)
+            file.touch()
+            self.setup_created_files.append(file)
+        for d in range(self.DIRS_NUM):
+            dir = pathlib.Path(self.files_dir) / 'files_{}'.format(d)
+            dir.mkdir(parents = True, exist_ok = True)
+            for f in range(self.FILES_NUM):
+                file = dir / 'file_{}{}.txt'.format(d, f)
+                file.touch()
+                self.setup_created_files.append(file)
+        os.chdir(self.db_dir)
+
+
+class Test_take_over(BaseTestCase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        '''
+        def setUp(self):
+        temp_cwd = self.cwd / '..'
+        if temp_cwd.exists():
+            os.chdir(temp_cwd)
+            shutil.rmtree(self.cwd, ignore_errors = True)
+
+        setattr(self.takeover_args, 'path', str(self.files_dir))
+        setattr(self.takeover_args, 'target', None)
+        setattr(self.takeover_args, 'extensions', None)
+        setattr(self.takeover_args, 'dryrun', False)
 
         self.db_dir.mkdir(parents = True, exist_ok = True)
         self.files_dir.mkdir(parents = True, exist_ok = True)
@@ -39,12 +81,7 @@ class Test_take_over(unittest.TestCase):
             file = self.files_dir / 'file_{}.txt'.format(i)
             file.touch()
         os.chdir(self.db_dir)
-
-
-    def tearDown(self):
-        os.chdir(self.cwd / '..')
-        shutil.rmtree(self.cwd, ignore_errors = True)
-
+        '''
 
     def get_single_item_db_path(self):
         '''return the path of the item in the database. Only single item is assumed to be in the database'''
@@ -55,19 +92,21 @@ class Test_take_over(unittest.TestCase):
 
     def test_links_created(self):
         '''make sure links are created inplace of original files during takeover'''
-        take_over.init(self.args)
-        take_over.take_over(self.args)
+        take_over.init(None)
+        take_over.take_over(self.takeover_args)
         # make sure db direcotry exists
         db = self.db_dir / 'takeover_db.json'
         self.assertEqual(db.exists(), True)
         file_count = 0
-        for i in self.files_dir.iterdir():
-            #make sure all links were created
-            self.assertTrue(i.is_symlink())
-            #make sure all links point to valid locations
-            self.assertTrue(i.resolve().exists())
-            file_count += 1
-        self.assertEqual(file_count, self.FILES_NUM)
+        for root, dirs, files in os.walk(self.files_dir):
+            for file in files:
+                i = pathlib.Path(root) / file
+                #make sure all links were created
+                self.assertTrue(i.is_symlink())
+                #make sure all links point to valid locations
+                self.assertTrue(i.resolve().exists())
+                file_count += 1
+        self.assertEqual(file_count, self.FILES_NUM * (self.DIRS_NUM + 1))
 
 
     def test_files_extensions_filter(self):
@@ -80,16 +119,16 @@ class Test_take_over(unittest.TestCase):
             file = self.files_dir / 'file_{}.ini'.format(i)
             file.touch()
         # check extensions with and without preceding '.'
-        self.args.extensions = ['xml', '.py']
-        take_over.init(self.args)
-        take_over.take_over(self.args)
+        self.takeover_args.extensions = ['xml', '.py']
+        take_over.init(None)
+        take_over.take_over(self.takeover_args)
         for i in self.files_dir.iterdir():
-            if i.suffix in ['.' + e.lstrip('.') for e in self.args.extensions]:
+            if i.suffix in ['.' + e.lstrip('.') for e in self.takeover_args.extensions]:
                 self.assertTrue(i.is_symlink())
             else:
                 self.assertFalse(i.is_symlink())
         #assume only one dir in database, so lets check the first one
-        extensions = ['.' + i.strip('.') for i in self.args.extensions]
+        extensions = ['.' + i.strip('.') for i in self.takeover_args.extensions]
         for i in self.get_single_item_db_path().iterdir():
             self.assertIn(i.suffix, extensions, 'file {} should not be in database. Its suffix is not in the extensions list'.format(i))
 
@@ -102,8 +141,8 @@ class Test_take_over(unittest.TestCase):
             file = self.files_dir / 'file_{}{}'.format(test_suffix, i)
             file.symlink_to(resolved_path)
         # check extensions with and without preceding '.'
-        take_over.init(self.args)
-        take_over.take_over(self.args)
+        take_over.init(None)
+        take_over.take_over(self.takeover_args)
         for i in self.files_dir.iterdir():
             if i.suffix == test_suffix:
                 self.assertEqual(str(i.resolve), resolved_path)
@@ -117,14 +156,14 @@ class Test_take_over(unittest.TestCase):
     def test_single_file_takeover(self):
         ''' takeover only a single file'''
         file_name = 'file_1.txt'
-        self.args.path = str(self.files_dir / file_name)
+        self.takeover_args.path = str(self.files_dir / file_name)
         file = self.files_dir / file_name
 
         #check file before take over
         self.assertFalse(file.is_symlink())
         #take over
-        take_over.init(self.args)
-        take_over.take_over(self.args)
+        take_over.init(None)
+        take_over.take_over(self.takeover_args)
         #check file after take over
         self.assertTrue(file.is_symlink())
         self.assertEqual(len(list(self.get_single_item_db_path().iterdir())), 1)
@@ -139,18 +178,16 @@ class Test_take_over(unittest.TestCase):
     def test_dryrun(self):
         '''takeover with dryrun flag on - nothing should be writen to disk'''
         # make sure nothing is added to the database
-        self.args.dryrun = True
-        take_over.init(self.args)
-        take_over.take_over(self.args)
+        self.takeover_args.dryrun = True
+        take_over.init(None)
+        take_over.take_over(self.takeover_args)
 
         db_items = list(self.db_dir.iterdir())
-        db_file_name = 'takeover_db.json'
-        f = open('takeover_db.json', 'r')
-        db = json.load(f)
-        f.close()
+        with open(self.db_file_name, 'r') as f:
+            db = json.load(f)
         
         self.assertEqual(len(db_items), 1) # only one file
-        self.assertEqual(db_items[0].name, db_file_name) # the single file is the database file
+        self.assertEqual(db_items[0].name, self.db_file_name) # the single file is the database file
         self.assertDictEqual(db, dict()) # the database file is empty
 
     
@@ -159,76 +196,44 @@ class Test_take_over(unittest.TestCase):
         env_var_name = 'DB_DIR'
         if platform.system().lower() == 'linux':
             os.environ[env_var_name] = str(self.db_dir)
-            self.args.target = '$'+env_var_name
-            take_over.init(self.args)
-            take_over.take_over(self.args)
-            for i in self.files_dir.iterdir():
-                #make sure all links were created
-                self.assertTrue(i.is_symlink())
-                #make sure the link uses the new target (databese directory alias)
-                self.assertTrue(os.readlink(str(i)).startswith('$'+env_var_name), 'link {} with target: {} should start with {}'.format(str(i), os.readlink(str(i)), env_var_name))
-                #make sure link points to the correct directory
-                link_target = os.path.expandvars(os.readlink(str(i)))
-                link_target = pathlib.Path(link_target)
-                self.assertEqual(str(self.get_single_item_db_path()), str(link_target.parent)) #str(i.resolve().parent))
-                #make sure the link points to the correct file
-                self.assertTrue(link_target.samefile(self.get_single_item_db_path() / i.name))
+            self.takeover_args.target = '$'+env_var_name
+            take_over.init(None)
+            take_over.take_over(self.takeover_args)
+            for root, dirs, files in os.walk(self.files_dir):
+                for file in files:
+                    i = pathlib.Path(root) / file
+                    #make sure all links were created
+                    self.assertTrue(i.is_symlink())
+                    #make sure the link uses the new target (databese directory alias)
+                    self.assertTrue(os.readlink(str(i)).startswith('$'+env_var_name), 'link {} with target: {} should start with {}'.format(str(i), os.readlink(str(i)), env_var_name))
+                    #make sure link points to the correct directory
+                    link_target = os.path.expandvars(os.readlink(str(i)))
+                    link_target = pathlib.Path(link_target)
+                    self.assertTrue(str(link_target).startswith(str(self.get_single_item_db_path())))
+                    #make sure the link points to the correct file
+                    relative_path = link_target.relative_to(self.get_single_item_db_path())
+                    self.assertTrue(link_target.samefile(self.get_single_item_db_path() / relative_path))
         else:
-            self.assertFalse(True, 'cuurently test is only implemented for linux')
+            self.assertFalse(True, 'curently test is only implemented for linux')
 
 
-class Test_set_links(unittest.TestCase):
+class Test_set_links(BaseTestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.cwd = os.getcwd()
-        self.cwd = pathlib.Path(self.cwd) / 'test_dir'
-        self.db_dir = self.cwd / 'db'
-        self.files_dir = self.cwd / 'files'
-        self.args = Cargs()
-        self.takeover_args = Cargs()
-        self.FILES_NUM = 5
-        self.DIRS_NUM = 7
 
 
     def setUp(self):
-        temp_cwd = self.cwd / '..'
-        if temp_cwd.exists():
-            os.chdir(temp_cwd)
-            shutil.rmtree(self.cwd, ignore_errors = True)
-
-        setattr(self.takeover_args, 'path', str(self.files_dir))
-        setattr(self.takeover_args, 'target', None)
-        setattr(self.takeover_args, 'extensions', None)
-        setattr(self.takeover_args, 'dryrun', False)
-
+        super().setUp()
         setattr(self.args, 'name', None)
         setattr(self.args, 'target', None)
         setattr(self.args, 'dryrun', False)
         setattr(self.args, 'force', False)
 
-        self.db_dir.mkdir(parents = True, exist_ok = True)
-        self.files_dir.mkdir(parents = True, exist_ok = True)
-        for i in range(self.FILES_NUM):
-            file = self.files_dir / 'file_{}.txt'.format(i)
-            file.touch()
-        for d in range(self.DIRS_NUM):
-            dir = pathlib.Path(self.files_dir) / 'files_{}'.format(d)
-            dir.mkdir(parents = True, exist_ok = True)
-            for f in range(self.FILES_NUM):
-                file = dir / 'file_{}{}.txt'.format(d, f)
-                file.touch()
-        os.chdir(self.db_dir)
-
-
-    def tearDown(self):
-        os.chdir(self.cwd / '..')
-        shutil.rmtree(self.cwd, ignore_errors = True)
-
 
     def test_all_items(self):
         '''test that links are created for all items in the database'''
         items = [self.files_dir / 'files_1', self.files_dir / 'files_2']
-        take_over.init(self.args)
+        take_over.init(None)
         for item in items:
             self.takeover_args.path = str(item)
             take_over.take_over(self.takeover_args)
@@ -274,7 +279,7 @@ class Test_set_links(unittest.TestCase):
     def test_dryrun(self):
         ''' test that no link is created in dryrun'''
         items = [self.files_dir / 'files_1', self.files_dir / 'files_2']
-        take_over.init(self.args)
+        take_over.init(None)
         for item in items:
             self.takeover_args.path = str(item)
             take_over.take_over(self.takeover_args)
@@ -340,55 +345,17 @@ class Test_set_links(unittest.TestCase):
             self.assertFalse(f.is_symlink())
         
 
-class Test_restore_source(unittest.TestCase):
+class Test_restore_source(BaseTestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.cwd = os.getcwd()
-        self.cwd = pathlib.Path(self.cwd) / 'test_dir'
-        self.db_dir = self.cwd / 'db'
-        self.files_dir = self.cwd / 'files'
-        self.args = Cargs()
-        self.takeover_args = Cargs()
-        self.FILES_NUM = 5
-        self.DIRS_NUM = 7
-        self.setup_created_files =list()
-
+        
 
     def setUp(self):
-        temp_cwd = self.cwd / '..'
-        if temp_cwd.exists():
-            os.chdir(temp_cwd)
-            shutil.rmtree(self.cwd, ignore_errors = True)
-
-        setattr(self.takeover_args, 'path', str(self.files_dir))
-        setattr(self.takeover_args, 'target', None)
-        setattr(self.takeover_args, 'extensions', None)
-        setattr(self.takeover_args, 'dryrun', False)
-
+        super().setUp()
         setattr(self.args, 'name', None)
         setattr(self.args, 'remove', False)
         setattr(self.args, 'force', False)
         setattr(self.args, 'dryrun', False)
-
-        self.db_dir.mkdir(parents = True, exist_ok = True)
-        self.files_dir.mkdir(parents = True, exist_ok = True)
-        for i in range(self.FILES_NUM):
-            file = self.files_dir / 'file_{}.txt'.format(i)
-            file.touch()
-            self.setup_created_files.append(file)
-        for d in range(self.DIRS_NUM):
-            dir = pathlib.Path(self.files_dir) / '_{}'.format(d)
-            dir.mkdir(parents = True, exist_ok = True)
-            for f in range(self.FILES_NUM):
-                file = dir / 'file_{}{}.txt'.format(d, f)
-                file.touch()
-                self.setup_created_files.append(file)
-        os.chdir(self.db_dir)
-
-
-    def tearDown(self):
-        os.chdir(self.cwd / '..')
-        shutil.rmtree(self.cwd, ignore_errors = True)
 
     
     def test_all_files_retored(self):
@@ -480,75 +447,77 @@ class Test_restore_source(unittest.TestCase):
         self.assertEqual(len(db_dir_contents), 1)
         self.assertEqual(db_dir_contents[0].name, 'takeover_db.json')
         
-        db_items = list(self.db_dir.iterdir())
-        db_file_name = 'takeover_db.json'
-        f = open('takeover_db.json', 'r')
-        db = json.load(f)
-        f.close()
+        with open(self.db_file_name, 'r') as f:
+            db = json.load(f)
         self.assertDictEqual(db, dict())
 
 
 
-class Test_remove_source(unittest.TestCase):
+class Test_remove_source(BaseTestCase):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.cwd = os.getcwd()
-        self.cwd = pathlib.Path(self.cwd) / 'test_dir'
-        self.db_dir = self.cwd / 'db'
-        self.files_dir = self.cwd / 'files'
-        self.args = Cargs()
-        self.FILES_NUM = 5
-        self.DIRS_NUM = 7
-
+        
 
     def setUp(self):
-        temp_cwd = self.cwd / '..'
-        if temp_cwd.exists():
-            os.chdir(temp_cwd)
-            shutil.rmtree(self.cwd, ignore_errors = True)
-
-        setattr(self.args, 'name', str(self.files_dir))
-        setattr(self.args, 'remove', None)
-        setattr(self.args, 'force', None)
+        super().setUp()
+        setattr(self.args, 'name', 'files')
         setattr(self.args, 'dryrun', False)
 
-        self.db_dir.mkdir(parents = True, exist_ok = True)
-        self.files_dir.mkdir(parents = True, exist_ok = True)
-        for i in range(self.FILES_NUM):
-            file = self.files_dir / 'file_{}.txt'.format(i)
-            file.touch()
-        for d in range(self.DIRS_NUM):
-            dir = pathlib.Path(self.files_dir) / '_{}'.format(d)
-            self.dir.mkdir(parents = True, exist_ok = True)
-            for f in range(self.FILES_NUM):
-                file = self.files_dir / 'file_{}{}.txt'.format(d, i)
-                file.touch()
-        os.chdir(self.db_dir)
-
-
-    def tearDown(self):
-        os.chdir(self.cwd / '..')
-        shutil.rmtree(self.cwd, ignore_errors = True)
-
-
-    @unittest.skip('Not implemented yet')
-    def test_removing_all(self):
-        '''test that links are created when given a partial item name that exists more than once in database'''
-        self.assertTrue(False)
-
-
-    @unittest.skip('Not implemented yet')
+    
     def test_removing_single_item(self):
-        '''test that links are created when given a partial item name that exists more than once in database'''
-        self.assertTrue(False)
+        '''test that single item is removed from the database'''
+        take_over.init(None)
+        take_over.take_over(self.takeover_args)
 
+        with open(self.db_file_name, 'r') as f:
+            db = json.load(f)
+        self.assertEqual(len(db.keys()), 1)
+        item_id = list(db.keys())[0]
+        item_dir = self.db_dir / item_id
+        self.assertTrue(item_dir.exists())
 
-    @unittest.skip('Not implemented yet')
-    def test_drtrun(self):
-        '''test that links are created when given a partial item name that exists more than once in database'''
-        self.assertTrue(False)
+        take_over.remove_source(self.args)
+        # assert database item is removed
+        self.assertFalse(item_dir.exists())
+        with open(self.db_file_name, 'r') as f:
+            db = json.load(f)
+        self.assertDictEqual(db, dict())
+
+        # assert links are removed
+        for root, dirs, files in os.walk(self.files_dir):
+            for file in files:
+                f = pathlib.Path(root) / file
+                self.assertFalse(f.is_symlink())
+        
+
+    def test_dryrun(self):
+        '''test that nothing is removed when using the dryrun flag'''
+        take_over.init(None)
+        take_over.take_over(self.takeover_args)
+
+        with open(self.db_file_name, 'r') as f:
+            db = json.load(f)
+        self.assertEqual(len(db.keys()), 1)
+        item_id = list(db.keys())[0]
+        item_dir = self.db_dir / item_id
+        self.assertTrue(item_dir.exists())
+
+        self.args.dryrun = True
+        take_over.remove_source(self.args)
+        
+        # nothing happens in database
+        with open(self.db_file_name, 'r') as f:
+            new_db = json.load(f)
+        self.assertDictEqual(db, new_db)
+
+        # nothing happens is existing links
+        for root, dirs, files in os.walk(self.files_dir):
+            for file in files:
+                f = pathlib.Path(root) / file
+                self.assertTrue(f.is_symlink())
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.CRITICAL)
     unittest.main()
